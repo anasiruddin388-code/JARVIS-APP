@@ -1,4 +1,4 @@
-import json, os, re, ssl, unicodedata, urllib.request, urllib.error
+import datetime, json, os, re, ssl, unicodedata, urllib.request, urllib.error
 
 _dir = "."
 conversation_history = []
@@ -61,6 +61,7 @@ def ask_jarvis(question):
             save_memory(memory)
             return "ঠিক আছে, অনুমতি অনুযায়ী কথাটি স্থায়ীভাবে মনে রাখলাম।"
 
+    now = datetime.datetime.now().strftime("%A, %d %B %Y, %I:%M %p")
     system_prompt = f"""
 You are JARVIS, a friendly and intelligent personal AI assistant.
 
@@ -95,6 +96,10 @@ LANGUAGE:
 - Use English words naturally when appropriate.
 - Never randomly switch to Hindi or other languages.
 - Use another language only when explicitly requested.
+
+CURRENT TIME:
+- The phone's local date and time right now is: {now}
+- Use it when asked about the time or date.
 
 RESPONSE:
 - Keep casual replies short and natural.

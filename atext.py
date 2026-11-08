@@ -28,9 +28,10 @@ def render(text, width_px, size_px, argb):
         n16 = len(text.encode("utf-16-le")) // 2   # Java string length
         paint = TextPaint(1)
         paint.setTextSize(float(size_px))
-        if argb >= 2 ** 31:
-            argb -= 2 ** 32
-        paint.setColor(argb)
+        # setColor() has an overload that takes a 64-bit "ColorLong"; Python
+        # ints picked it and caused "Invalid ID: 63". setARGB() is unambiguous.
+        paint.setARGB((argb >> 24) & 255, (argb >> 16) & 255,
+                      (argb >> 8) & 255, argb & 255)
         width = max(int(width_px), 50)
         layout = Builder.obtain(text, 0, n16, paint, width).build()
         height = max(int(layout.getHeight()), 1)
