@@ -22,10 +22,11 @@ jobs:
       - name: Install buildozer
         run: pip install buildozer "cython<3"
       - name: Build APK
+        shell: bash
         run: buildozer -v android debug 2>&1 | tee build.log
       - name: Show error
         if: failure()
-        run: grep -n -i -B3 -A6 "error\|failed\|traceback" build.log | tail -60
+        run: tail -70 build.log
       - uses: actions/upload-artifact@v4
         with:
           name: jarvis-apk
