@@ -18,11 +18,14 @@ jobs:
       - name: Install system packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev
+          sudo apt-get install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev libltdl-dev
       - name: Install buildozer
         run: pip install buildozer "cython<3"
       - name: Build APK
-        run: buildozer -v android debug
+        run: buildozer -v android debug 2>&1 | tee build.log
+      - name: Show error
+        if: failure()
+        run: grep -n -i -B3 -A6 "error\|failed\|traceback" build.log | tail -60
       - uses: actions/upload-artifact@v4
         with:
           name: jarvis-apk
