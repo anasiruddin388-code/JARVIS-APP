@@ -1,4 +1,4 @@
-import socket, threading
+import os, socket, threading
 from kivy.app import App
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.boxlayout import BoxLayout
@@ -19,6 +19,19 @@ Window.clearcolor = (0.01, 0.03, 0.09, 1)
 CYAN = (0, 0.9, 1, 1)
 BTN_BG = (0, 0.15, 0.25, 1)
 FIELD_BG = (0, 0.08, 0.16, 1)
+
+def _bn_font():
+    for p in ("/system/fonts/NotoSansBengali-Regular.ttf",
+              "/system/fonts/NotoSansBengali-VF.ttf",
+              "/system/fonts/NotoSansBengaliUI-Regular.ttf",
+              "/system/fonts/Lohit-Bengali.ttf",
+              "/system/fonts/NotoSerifBengali-Regular.ttf"):
+        if os.path.exists(p):
+            return p
+    return None
+
+BN_FONT = _bn_font()
+FONT_KW = {"font_name": BN_FONT} if BN_FONT else {}
 
 class Core(Widget):
     glow = NumericProperty(0.3)
@@ -151,7 +164,7 @@ class ChatScreen(Screen):
         box.add_widget(top)
         self.scroll = ScrollView(size_hint=(1, 0.74))
         self.log = Label(text="", color=(0.8, 0.95, 1, 1), size_hint_y=None,
-                         halign="left", valign="top")
+                         halign="left", valign="top", **FONT_KW)
         self.log.bind(width=lambda i, w: setattr(i, "text_size", (w, None)),
                       texture_size=lambda i, s: setattr(i, "height", s[1]))
         self.scroll.add_widget(self.log)
@@ -160,7 +173,7 @@ class ChatScreen(Screen):
         self.inp = TextInput(multiline=False, hint_text="Message...",
                              background_color=FIELD_BG,
                              foreground_color=(1, 1, 1, 1),
-                             cursor_color=CYAN)
+                             cursor_color=CYAN, **FONT_KW)
         self.inp.bind(on_text_validate=self.send)
         send = btn("SEND", size_hint=(0.28, 1))
         send.bind(on_release=self.send)
