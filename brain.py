@@ -1,4 +1,5 @@
-import datetime, json, os, re, ssl, unicodedata, urllib.request, urllib.error
+import datetime, html, json, os, re, ssl, unicodedata
+import urllib.parse, urllib.request, urllib.error
 
 _dir = "."
 conversation_history = []
@@ -66,7 +67,7 @@ def _sanitize(text):
 
 def _call(model, msgs, key):
     body = json.dumps({"model": model, "messages": msgs,
-                       "max_tokens": 800, "temperature": 0.3}).encode("utf-8")
+                       "max_tokens": 1500, "temperature": 0.6}).encode("utf-8")
     req = urllib.request.Request(URL, data=body, headers={
         "Authorization": "Bearer " + key,
         "Content-Type": "application/json"})
@@ -86,6 +87,84 @@ def _merge_system(msgs):
     return rest
 
 
+
+_NO_SEARCH = re.compile(r"\b(baje|time|somoy|date|tarikh)\b|সময়|তারিখ|কয়টা|কটা", re.I)
+_SEARCH_WORDS = (
+    "search", "khuje", "khoj", "google", "news", "khobor", "latest", "weather",
+    "abohawa", "temperature", "price", "dam koto", "dor koto", "score", "result",
+    "who won", "ke jitlo", "election", "nirbachon", "prodhanmontri", "president",
+    "release date", "stock", "dollar", "exchange rate",
+    "সার্চ", "খুঁজ", "খুজ", "খবর", "সর্বশেষ", "আবহাওয়া", "দাম কত", "স্কোর",
+    "ফলাফল", "নির্বাচন", "প্রধানমন্ত্রী")
+
+
+def needs_search(q):
+    low = q.lower()
+    if _NO_SEARCH.search(low):
+        return False
+    return any(w in low for w in _SEARCH_WORDS)
+
+
+def _get(url, timeout=12):
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (Linux; Android 14) JARVIS-App/1.0",
+        "Accept-Language": "en"})
+    with urllib.request.urlopen(req, timeout=timeout, context=_ctx()) as r:
+        return r.read().decode("utf-8", "ignore")
+
+
+def _plain(h):
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", "", h))).strip()
+
+
+def _ddg(q):
+    page = _get("https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(q))
+    titles = re.findall(r'class="result__a"[^>]*>(.*?)</a>', page, re.S)
+    snips = re.findall(r'class="result__snippet[^"]*"[^>]*>(.*?)</a>', page, re.S)
+    out = []
+    for i, t in enumerate(titles[:4]):
+        s = _plain(snips[i]) if i < len(snips) else ""
+        out.append((_plain(t), s))
+    return out
+
+
+def _wiki(q):
+    url = ("https://en.wikipedia.org/w/api.php?action=query&list=search&utf8=1"
+           "&format=json&srlimit=3&srsearch=" + urllib.parse.quote(q))
+    data = json.loads(_get(url))
+    return [(x["title"], _plain(x["snippet"]))
+            for x in data.get("query", {}).get("search", [])]
+
+
+def web_search(q):
+    """Free search, no API key: DuckDuckGo first, Wikipedia as backup."""
+    for fn in (_ddg, _wiki):
+        try:
+            res = [r for r in fn(q) if r[0] or r[1]]
+            if res:
+                return "\n".join("%d. %s - %s" % (i + 1, t, s)
+                                 for i, (t, s) in enumerate(res))
+        except Exception:
+            continue
+    return ""
+
+
+def _make_query(question, models, key):
+    sysm = {"role": "system", "content":
+            "Write ONE short English web search query (max 8 words) for the "
+            "user's question. The question may be Bengali or Roman Bengali. "
+            "Output only the query, nothing else."}
+    for model in models[:2]:
+        try:
+            q = _call(model, [sysm, {"role": "user", "content": question}], key)
+            q = _sanitize(q).strip(" \"'\n")
+            if q:
+                return q[:100]
+        except Exception:
+            continue
+    return question[:100]
+
+
 def ask_jarvis(question):
     cfg = load_cfg()
     api_key = cfg.get("api_key", "")
@@ -103,14 +182,33 @@ def ask_jarvis(question):
             return "ঠিক আছে, অনুমতি অনুযায়ী কথাটি স্থায়ীভাবে মনে রাখলাম।"
 
     now = datetime.datetime.now().strftime("%A, %d %B %Y, %I:%M %p")
+    born = datetime.date(2026, 11, 8)
+    age_days = (datetime.date.today() - born).days
     system_prompt = f"""
 You are JARVIS (জার্ভিস), the personal AI assistant of Nasiruddin (নাসিরউদ্দিন).
+The person chatting with you is ALWAYS Nasiruddin, your creator. When he says
+"amar / amr / আমার" he means himself: "amar naam ki" -> "আপনার নাম নাসিরউদ্দিন।"
 
 IDENTITY:
-- Your name is JARVIS. You were created by Nasiruddin. He is your creator.
-- If asked who made you, answer in this style:
-  "আমাকে নাসিরউদ্দিন তৈরি করেছেন। আমি তাঁর ব্যক্তিগত AI অ্যাসিস্ট্যান্ট জার্ভিস।"
+- Your name is JARVIS. You were created by Nasiruddin on 8 November 2026
+  (৮ নভেম্বর ২০২৬). Today you are {age_days} days old.
+- If asked who made you: "আমাকে নাসিরউদ্দিন তৈরি করেছেন। আমি তাঁর ব্যক্তিগত
+  AI অ্যাসিস্ট্যান্ট জার্ভিস।"
+- If asked when you were made: "আমাকে ৮ নভেম্বর ২০২৬ তারিখে তৈরি করা হয়েছে।"
 - Never claim that an AI company or model created you. Never mention model names.
+
+PERSONALITY:
+- Friendly, witty and playful. Add a little fun: a light joke or a clever remark
+  where it fits.
+- Sometimes (about once in every 4-5 casual replies, never every time) tease
+  Nasiruddin lightly, like a good friend roasting him: for example that he is
+  still a beginner programmer, or that he is chatting with his own creation.
+  Keep it affectionate, never hurtful. Never joke about religion, family,
+  health, appearance or any sensitive topic. No teasing when he asks for facts,
+  help, news, or seems sad, tired or in a hurry.
+- Stories, jokes and explanations: be creative, vivid and fun. A story has a
+  beginning, a funny middle and a nice ending, about 8 to 12 sentences, unless
+  he asks for something else.
 
 LANGUAGE (very important):
 - ALWAYS reply ONLY in Bengali script (বাংলা অক্ষর), in simple, natural, correct
@@ -130,11 +228,12 @@ ANSWER STYLE (very important):
 - Example: user "tomake ke baniyeche" -> you "আমাকে নাসিরউদ্দিন তৈরি করেছেন।"
 - Example: user "jupiter er bisoye kichu bolo" -> you
   "জুপিটার (বৃহস্পতি) আমাদের সৌরজগতের সবচেয়ে বড় গ্রহ। ..."
-- Be short and clear: 1 to 3 sentences for simple questions. Give details only
-  when asked.
+- Simple questions: 1 to 3 sentences. Give more only when asked or for stories.
 - Do NOT end with a question or an offer such as "আর কিছু জানতে চান?".
 - No markdown, no asterisks, no bullet symbols. Plain sentences only.
-- Never invent facts. Remember the conversation context.
+- If the message contains WEB SEARCH RESULTS, use them to answer. If they do not
+  contain the answer, say honestly that you could not find it. Never invent facts.
+- Remember the conversation context.
 - Never perform device actions without explicit permission.
 
 CURRENT TIME:
@@ -146,18 +245,30 @@ PERMANENT MEMORY (saved details about Nasiruddin, use when relevant):
 - Do not assume missing details.
 - Only save new personal details when Nasiruddin explicitly gives permission.
 """
-    msgs = ([{"role": "system", "content": system_prompt}]
-            + conversation_history
-            + [{"role": "user", "content": question}])
-
     chosen = (cfg.get("model") or "").strip()
     models = []
     if chosen and chosen != "openrouter/free":
         models.append(chosen)
     models += [x for x in CHAIN if x not in models]
 
-    last = ""
+    user_text = question
+    if needs_search(question):
+        q = _make_query(question, models, api_key)
+        found = web_search(q)
+        if found:
+            user_text = (question + "\n\n[WEB SEARCH RESULTS for: " + q + "]\n"
+                         + found)
+        else:
+            user_text = (question + "\n\n[WEB SEARCH: nothing found, internet "
+                         "search did not work. Tell him honestly.]")
+
+    msgs = ([{"role": "system", "content": system_prompt}]
+            + conversation_history
+            + [{"role": "user", "content": user_text}])
+
+    errs = []
     for model in models:
+        short = model.split("/")[-1][:18]
         for merged in (False, True):
             try:
                 answer = _sanitize(
@@ -171,29 +282,25 @@ PERMANENT MEMORY (saved details about Nasiruddin, use when relevant):
                     if len(conversation_history) > 20:
                         conversation_history[:] = conversation_history[-20:]
                     return answer
-                last = model + ": khali uttor"
+                errs.append(short + ": khali")
                 break
             except urllib.error.HTTPError as e:
                 if e.code == 401:
                     return "Error 401: API Key sothik na. Settings-e Key check koro."
-                try:
-                    detail = e.read().decode("utf-8", "ignore")[:120]
-                except Exception:
-                    detail = ""
-                last = "%s: Error %s %s" % (model, e.code, detail)
                 if e.code == 400 and not merged:
                     continue          # retry with system text inside user turn
+                errs.append("%s: %s" % (short, e.code))
                 break
             except (urllib.error.URLError, OSError) as e:
                 if "timed out" in str(e).lower():
-                    last = model + ": timeout"
+                    errs.append(short + ": timeout")
                     break
                 return ("Internet ba connection somoshya. Karon: "
                         + type(e).__name__ + " " + str(e)[:150])
             except Exception as e:
-                last = model + ": " + type(e).__name__
+                errs.append(short + ": " + type(e).__name__)
                 break
-    return "Cloud AI uttor dilo na. Shesh error: " + last
+    return "Cloud AI uttor dilo na (free limit shesh ba model busy). " + " | ".join(errs[-4:])
 
 
 def get_reply(text, lang="en"):
