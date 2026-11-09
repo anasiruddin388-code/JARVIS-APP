@@ -38,6 +38,7 @@ if ANDROID:
     PythonActivity = autoclass("org.kivy.android.PythonActivity")
     Locale = autoclass("java.util.Locale")
     Bundle = autoclass("android.os.Bundle")
+    HashMap = autoclass("java.util.HashMap")
     Intent = autoclass("android.content.Intent")
     TextToSpeech = autoclass("android.speech.tts.TextToSpeech")
     SpeechRecognizer = autoclass("android.speech.SpeechRecognizer")
@@ -209,17 +210,26 @@ class Speaker:
     def speak(self, text, add=False):
         if not self.ready or not text:
             return False
-        try:
-            mode = (TextToSpeech.QUEUE_ADD if add
-                    else TextToSpeech.QUEUE_FLUSH)
-            r = self.tts.speak(text, mode, Bundle(), "jarvis")
-            if r != 0:
-                self.msg = "speak() error code %s" % r
-                return False
-            return True
-        except Exception as e:
-            self.msg = "speak() fail: " + type(e).__name__
-            return False
+        mode = TextToSpeech.QUEUE_ADD if add else TextToSpeech.QUEUE_FLUSH
+        first_err = ""
+        # 1) modern speak(text, mode, Bundle, id)  2) older speak(text, mode, params)
+        for how in (0, 1, 2):
+            try:
+                if how == 0:
+                    r = self.tts.speak(text, mode, Bundle(), "jarvis")
+                elif how == 1:
+                    r = self.tts.speak(text, mode, None)
+                else:
+                    r = self.tts.speak(text, mode, HashMap())
+                if r == 0:
+                    return True
+                if not first_err:
+                    first_err = "code %s" % r
+            except Exception as e:
+                if not first_err:
+                    first_err = repr(e)[:160]
+        self.msg = "speak() fail: " + first_err
+        return False
 
     def busy(self):
         try:
