@@ -350,15 +350,17 @@ class VoiceScreen(Screen):
         self.status = Label(text="READY", color=CYAN, font_size="18sp",
                             size_hint=(1, 0.06))
         box.add_widget(self.status)
-        self.msgs = MsgList(size_hint=(1, 0.5))
+        self.msgs = MsgList(size_hint=(1, 0.38))
         box.add_widget(self.msgs)
         b1 = btn("TAP TO TALK", size_hint=(1, 0.09))
         b2 = btn("WAKE WORD: START", size_hint=(1, 0.09))
         b3 = btn("STOP", size_hint=(1, 0.09))
+        b4 = btn("TEST VOICE", size_hint=(1, 0.09))
+        b4.bind(on_release=lambda *a: App.get_running_app().voice.test())
         b1.bind(on_release=lambda *a: self.go("once"))
         b2.bind(on_release=lambda *a: self.go("wake"))
         b3.bind(on_release=lambda *a: App.get_running_app().voice.stop())
-        for b in (b1, b2, b3):
+        for b in (b1, b2, b3, b4):
             box.add_widget(b)
         self.add_widget(box)
 

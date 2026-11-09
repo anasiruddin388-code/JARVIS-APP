@@ -156,7 +156,9 @@ class Speaker:
     def __init__(self):
         self.tts = None
         self.ready = False
-        self.msg = ""
+        self.msg = "Voice output ekhono ready hoyni."
+        self.engine = ""
+        self.lang = ""
 
     def init(self):
         if self.tts is not None:
@@ -164,28 +166,59 @@ class Speaker:
         try:
             self._l = _TtsInit(self._on_init)
             self.tts = TextToSpeech(PythonActivity.mActivity, self._l)
-        except Exception:
-            self.msg = "Voice output chalu hoyni."
+        except Exception as e:
+            self.msg = "Voice output chalu hoyni: " + type(e).__name__
 
     def _on_init(self, status):
+        if self.tts is None:                      # callback came too early
+            Clock.schedule_once(lambda dt: self._on_init(status), 0.1)
+            return
         if status != 0:
-            self.msg = "Voice output chalu hoyni (TTS engine nei)."
+            self.msg = ("Voice output chalu hoyni (TTS engine nei ba block). "
+                        "Phone Settings-e Text-to-speech engine thik koro.")
             return
         try:
-            r = self.tts.setLanguage(Locale("bn", "BD"))
-            if r < 0:
-                self.msg = "Phone-e Bengali voice nei, default voice cholbe."
+            self.engine = str(self.tts.getDefaultEngine())
         except Exception:
-            pass
+            self.engine = "?"
+        code = -2
+        for loc in (Locale("bn", "BD"), Locale("bn", "IN"), Locale("bn")):
+            try:
+                r = self.tts.setLanguage(loc)
+            except Exception:
+                r = -2
+            code = r
+            if r >= 0:
+                self.lang = str(loc.toString())
+                break
+        if code < 0:
+            self.msg = ("Phone-e Bengali voice nei (code %s). Bengali uttor "
+                        "shona jabe na." % code)
+        else:
+            self.msg = ""
         self.ready = True
 
-    def speak(self, text):
+    def info(self):
+        if not self.ready:
+            return self.msg
+        eng = self.engine.split(".")[-1] if self.engine else "?"
+        if self.lang:
+            return "Voice engine: %s | Bengali: OK (%s)" % (eng, self.lang)
+        return "Voice engine: %s | Bengali voice NEI. %s" % (eng, self.msg)
+
+    def speak(self, text, add=False):
         if not self.ready or not text:
             return False
         try:
-            self.tts.speak(text, TextToSpeech.QUEUE_FLUSH, Bundle(), "jarvis")
+            mode = (TextToSpeech.QUEUE_ADD if add
+                    else TextToSpeech.QUEUE_FLUSH)
+            r = self.tts.speak(text, mode, Bundle(), "jarvis")
+            if r != 0:
+                self.msg = "speak() error code %s" % r
+                return False
             return True
-        except Exception:
+        except Exception as e:
+            self.msg = "speak() fail: " + type(e).__name__
             return False
 
     def busy(self):
@@ -278,17 +311,47 @@ class Voice:
         _keep_on(True)
         Clock.schedule_once(self._boot, 1.2)
 
-    def _boot(self, dt):
+    def _boot(self, dt=0):
         if not self.active:
             return
-        if not self.speaker.ready and self.speaker.msg:
-            self.on_text("JARVIS", self.speaker.msg)
-        elif self.speaker.msg:
-            self.on_text("JARVIS", self.speaker.msg)
+        self._tries = getattr(self, "_tries", 0) + 1
+        if not self.speaker.ready and self._tries < 8:
+            Clock.schedule_once(self._boot, 0.5)     # wait for TTS engine
+            return
+        self._tries = 0
+        self.on_text("JARVIS", self.speaker.info())
         if self.mode == "wake":
-            self.speaker.speak("Hello Nasiruddin. Jarvis is ready.")
+            self._warn(self.speaker.speak("Hello Nasiruddin. Jarvis is ready."))
             self.on_text("JARVIS", "'Jarvis' bolo.")
         Clock.schedule_once(self._next, 0.6)
+
+    def _warn(self, ok):
+        if not ok and not getattr(self, "_warned", False):
+            self._warned = True
+            self.on_text("JARVIS", "(Voice output hochhe na: "
+                         + (self.speaker.msg or "karon jani na") + ")")
+
+    def test(self):
+        """TEST VOICE button: speaks a Bengali and an English sample."""
+        if not ANDROID:
+            self.on_status("Eta shudhu Android phone-e kaj kore")
+            return
+        self.speaker.init()
+        self._tries = 0
+        self._test_wait()
+
+    def _test_wait(self, dt=0):
+        self._tries = getattr(self, "_tries", 0) + 1
+        if not self.speaker.ready and self._tries < 8:
+            Clock.schedule_once(self._test_wait, 0.5)
+            return
+        self._tries = 0
+        self.on_text("JARVIS", self.speaker.info())
+        ok = self.speaker.speak("আমি জার্ভিস। আপনি কি আমার কথা শুনতে পাচ্ছেন?")
+        self.speaker.speak("Hello Nasiruddin. This is a voice test.", add=True)
+        if not ok:
+            self.on_text("JARVIS", "(Voice output hochhe na: "
+                         + (self.speaker.msg or "karon jani na") + ")")
 
     def _next(self, dt=0):
         if not self.active:
@@ -312,7 +375,7 @@ class Voice:
 
     def _say(self, text, then_stop=False):
         self.on_status("SPEAKING")
-        self.speaker.speak(text)
+        self._warn(self.speaker.speak(text))
         self.finish = then_stop
         Clock.schedule_once(self._next, 0.7)
 
