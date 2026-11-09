@@ -1,10 +1,13 @@
-import datetime, html, json, os, re, ssl, unicodedata
+import datetime, html, json, os, re, ssl, time, unicodedata
 import urllib.parse, urllib.request, urllib.error
 
 _dir = "."
 conversation_history = []
 URL = "https://openrouter.ai/api/v1/chat/completions"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+GEMINI_MODELS = ["gemini-flash-latest", "gemini-2.5-flash"]
 DEFAULT_MODEL = "openrouter/free"   # means: use CHAIN below
+_or_block_until = 0.0     # OpenRouter daily free limit reached -> skip until then
 
 def _ctx():
     try:
@@ -30,10 +33,15 @@ def load_cfg():
     except Exception:
         return {}
 
-def save_cfg(api_key, model=""):
+def save_cfg(api_key, model="", gemini_key=""):
+    cfg = load_cfg()
+    if api_key.strip():
+        cfg["api_key"] = api_key.strip()
+    if gemini_key.strip():
+        cfg["gemini_key"] = gemini_key.strip()
+    cfg["model"] = model.strip() or DEFAULT_MODEL
     with open(_cfg_path(), "w", encoding="utf-8") as f:
-        json.dump({"api_key": api_key.strip(),
-                   "model": model.strip() or DEFAULT_MODEL}, f)
+        json.dump(cfg, f)
 
 def load_memory():
     try:
@@ -65,10 +73,10 @@ def _sanitize(text):
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def _call(model, msgs, key):
+def _call(model, msgs, key, url=URL):
     body = json.dumps({"model": model, "messages": msgs,
                        "max_tokens": 1500, "temperature": 0.6}).encode("utf-8")
-    req = urllib.request.Request(URL, data=body, headers={
+    req = urllib.request.Request(url, data=body, headers={
         "Authorization": "Bearer " + key,
         "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=45, context=_ctx()) as r:
@@ -149,14 +157,15 @@ def web_search(q):
     return ""
 
 
-def _make_query(question, models, key):
+def _make_query(question, attempts):
     sysm = {"role": "system", "content":
             "Write ONE short English web search query (max 8 words) for the "
             "user's question. The question may be Bengali or Roman Bengali. "
             "Output only the query, nothing else."}
-    for model in models[:2]:
+    for _, url, key, model in attempts[:2]:
         try:
-            q = _call(model, [sysm, {"role": "user", "content": question}], key)
+            q = _call(model, [sysm, {"role": "user", "content": question}],
+                      key, url)
             q = _sanitize(q).strip(" \"'\n")
             if q:
                 return q[:100]
@@ -166,9 +175,11 @@ def _make_query(question, models, key):
 
 
 def ask_jarvis(question):
+    global _or_block_until
     cfg = load_cfg()
     api_key = cfg.get("api_key", "")
-    if not api_key:
+    gem_key = cfg.get("gemini_key", "")
+    if not api_key and not gem_key:
         return "API Key নেই। Settings-এ Key না দিলে Cloud AI কাজ করবে না।"
 
     memory = load_memory()
@@ -251,9 +262,18 @@ PERMANENT MEMORY (saved details about Nasiruddin, use when relevant):
         models.append(chosen)
     models += [x for x in CHAIN if x not in models]
 
+    attempts = []                       # (provider, url, key, model)
+    if api_key and time.time() >= _or_block_until:
+        attempts += [("or", URL, api_key, m) for m in models]
+    if gem_key:
+        attempts += [("gem", GEMINI_URL, gem_key, m) for m in GEMINI_MODELS]
+    if not attempts:
+        return ("OpenRouter-er free limit shesh. Proti din bhor-e (prai 5:30) "
+                "abar cholbe. Ba Settings-e free Gemini Key dao.")
+
     user_text = question
     if needs_search(question):
-        q = _make_query(question, models, api_key)
+        q = _make_query(question, attempts)
         found = web_search(q)
         if found:
             user_text = (question + "\n\n[WEB SEARCH RESULTS for: " + q + "]\n"
@@ -267,13 +287,15 @@ PERMANENT MEMORY (saved details about Nasiruddin, use when relevant):
             + [{"role": "user", "content": user_text}])
 
     errs = []
-    for model in models:
-        short = model.split("/")[-1][:18]
+    for prov, url, key, model in attempts:
+        if prov == "or" and time.time() < _or_block_until:
+            continue                    # daily limit hit earlier in this loop
+        short = ("Gemini" if prov == "gem" else model.split("/")[-1][:16])
         for merged in (False, True):
             try:
                 answer = _sanitize(
                     _call(model, _merge_system(msgs) if merged else msgs,
-                          api_key))
+                          key, url))
                 if answer:
                     conversation_history.append(
                         {"role": "user", "content": question})
@@ -285,10 +307,25 @@ PERMANENT MEMORY (saved details about Nasiruddin, use when relevant):
                 errs.append(short + ": khali")
                 break
             except urllib.error.HTTPError as e:
-                if e.code == 401:
-                    return "Error 401: API Key sothik na. Settings-e Key check koro."
+                try:
+                    detail = e.read().decode("utf-8", "ignore")
+                except Exception:
+                    detail = ""
+                if e.code in (401, 403):
+                    errs.append(("OpenRouter" if prov == "or" else "Gemini")
+                                + " Key bhul?")
+                    break
                 if e.code == 400 and not merged:
-                    continue          # retry with system text inside user turn
+                    continue            # retry with system text inside user turn
+                if e.code == 429 and prov == "or" and (
+                        "per-day" in detail or "per day" in detail
+                        or "daily" in detail.lower()):
+                    now = datetime.datetime.utcnow()
+                    nxt = (now + datetime.timedelta(days=1)).replace(
+                        hour=0, minute=0, second=0, microsecond=0)
+                    _or_block_until = time.time() + (nxt - now).total_seconds()
+                    errs.append("OpenRouter daily limit shesh")
+                    break
                 errs.append("%s: %s" % (short, e.code))
                 break
             except (urllib.error.URLError, OSError) as e:
@@ -300,7 +337,7 @@ PERMANENT MEMORY (saved details about Nasiruddin, use when relevant):
             except Exception as e:
                 errs.append(short + ": " + type(e).__name__)
                 break
-    return "Cloud AI uttor dilo na (free limit shesh ba model busy). " + " | ".join(errs[-4:])
+    return ("Cloud AI uttor dilo na. " + " | ".join(dict.fromkeys(errs[-5:])))
 
 
 def get_reply(text, lang="en"):

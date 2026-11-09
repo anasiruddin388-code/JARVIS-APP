@@ -299,6 +299,12 @@ class SettingsScreen(Screen):
                              size_hint=(1, 0.08), background_color=FIELD_BG,
                              foreground_color=(1, 1, 1, 1))
         box.add_widget(self.key)
+        box.add_widget(Label(text="Gemini API Key (backup, free) - optional",
+                             color=(0.6, 0.85, 1, 1), size_hint=(1, 0.06)))
+        self.gkey = TextInput(multiline=False, password=True,
+                              size_hint=(1, 0.08), background_color=FIELD_BG,
+                              foreground_color=(1, 1, 1, 1))
+        box.add_widget(self.gkey)
         box.add_widget(Label(text="Model name (khali rakhle default)",
                              color=(0.6, 0.85, 1, 1), size_hint=(1, 0.06)))
         self.model = TextInput(multiline=False, size_hint=(1, 0.08),
@@ -316,16 +322,21 @@ class SettingsScreen(Screen):
     def on_pre_enter(self, *a):
         cfg = brain.load_cfg()
         self.model.text = cfg.get("model", "")
-        self.msg.text = "Key saved" if cfg.get("api_key") else "Key nei"
+        self.msg.text = ("OpenRouter: " + ("saved" if cfg.get("api_key") else "nei")
+                         + "   Gemini: " + ("saved" if cfg.get("gemini_key") else "nei"))
 
     def save(self, *a):
         k = self.key.text.strip()
-        if not k:
-            self.msg.text = "Key khali, save hoyni"
+        g = self.gkey.text.strip()
+        cfg = brain.load_cfg()
+        if not k and not g and not cfg.get("api_key") and not cfg.get("gemini_key"):
+            self.msg.text = "Kono Key deoa hoyni, save hoyni"
             return
-        brain.save_cfg(k, self.model.text)
+        brain.save_cfg(k, self.model.text, g)
         self.key.text = ""
-        self.msg.text = "Saved. Ekhon Chat e jao."
+        self.gkey.text = ""
+        self.on_pre_enter()
+        self.msg.text = "Saved. " + self.msg.text
 
 class VoiceScreen(Screen):
     def __init__(self, **kw):
