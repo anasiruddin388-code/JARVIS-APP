@@ -21,9 +21,23 @@ jobs:
           sudo apt-get install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev libssl-dev libltdl-dev
       - name: Install buildozer
         run: pip install buildozer "cython<3"
+      - name: Cache buildozer
+        uses: actions/cache@v4
+        with:
+          path: |
+            .buildozer
+            ~/.buildozer
+          key: buildozer-${{ hashFiles('buildozer.spec') }}
       - name: Build APK
         shell: bash
-        run: buildozer -v android debug 2>&1 | tee build.log
+        run: |
+          for i in 1 2 3 4; do
+            buildozer -v android debug 2>&1 | tee -a build.log
+            if ls bin/*.apk >/dev/null 2>&1; then exit 0; fi
+            echo "Build failed, retry $i after 90 seconds" | tee -a build.log
+            sleep 90
+          done
+          exit 1
       - name: Save log
         if: always()
         uses: actions/upload-artifact@v4
