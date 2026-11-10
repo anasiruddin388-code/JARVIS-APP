@@ -63,10 +63,11 @@ if ANDROID:
         __javainterfaces__ = ["android/speech/RecognitionListener"]
         __javacontext__ = "app"
 
-        def __init__(self, on_result, on_error):
+        def __init__(self, on_result, on_error, on_begin=None):
             super().__init__()
             self.on_result = on_result
             self.on_error = on_error
+            self.on_begin = on_begin
 
         @java_method("(Landroid/os/Bundle;)V")
         def onReadyForSpeech(self, params):
@@ -74,7 +75,8 @@ if ANDROID:
 
         @java_method("()V")
         def onBeginningOfSpeech(self):
-            pass
+            if self.on_begin:
+                self.on_begin()
 
         @java_method("(F)V")
         def onRmsChanged(self, rms):
@@ -117,7 +119,7 @@ if ANDROID:
     def _ui_start(h, lang):
         try:
             if h.rec is None:
-                h.lis = _RecListener(h._res, h._err)
+                h.lis = _RecListener(h._res, h._err, h._began)
                 h.rec = SpeechRecognizer.createSpeechRecognizer(
                     PythonActivity.mActivity)
                 h.rec.setRecognitionListener(h.lis)
@@ -305,9 +307,14 @@ class Listener:
         self.lis = None
         self.cb = None
         self.lang = ""
+        self.began = False
+
+    def _began(self):
+        self.began = True
 
     def listen(self, lang, cb):
         self.cb = cb
+        self.began = False
         _ui_start(self, lang)
 
     def _res(self, texts):
@@ -347,6 +354,8 @@ class Voice:
         self.stage = "wake"
         self.errs = 0
         self.finish = False
+        self.buf = ""
+        self._tok = 0
 
     def start(self, mode):
         if not ANDROID:
@@ -482,10 +491,42 @@ class Voice:
                 return
             rest = low.replace(hit, "", 1).strip(" ,.!?।")
             if len(rest) > 2:
-                self.on_text("You", text)
-                return self._ask(rest)
+                return self._collect(rest)
             self.stage = "command"
             return self._say("জি, বলুন।")
+        self._collect(text)
+
+    # ---- long questions: keep listening a little after a pause ----
+    def _collect(self, text):
+        self.buf = (self.buf + " " + text).strip()
+        self._tok += 1
+        tok = self._tok
+        self.on_status("LISTENING")
+        self.listener.listen(self.lang_fn(),
+                             lambda t, e, tk=tok: self._cont(t, e, tk))
+        Clock.schedule_once(lambda dt: self._cont_timeout(tok), 1.7)
+
+    def _cont(self, text, err, tok):
+        if not self.active or tok != self._tok:
+            return
+        if err is not None or not text.strip():
+            return self._finish_collect()
+        self._collect(text)                      # more words came: keep joining
+
+    def _cont_timeout(self, tok):
+        if not self.active or tok != self._tok:
+            return
+        if self.listener.began:                  # he is speaking again: wait
+            Clock.schedule_once(lambda dt: self._cont_timeout(tok), 1.0)
+            return
+        self.listener.cancel()
+        self._finish_collect()
+
+    def _finish_collect(self):
+        self._tok += 1
+        text, self.buf = self.buf.strip(), ""
+        if not text:
+            return self._silence()
         self.on_text("You", text)
         self._ask(text)
 
