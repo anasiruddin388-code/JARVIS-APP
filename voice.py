@@ -156,6 +156,17 @@ if ANDROID:
             pass
 
     @run_on_ui_thread
+    def _dim_ui(level):
+        """level 0.01 = almost black screen, -1 = back to normal brightness."""
+        try:
+            w = PythonActivity.mActivity.getWindow()
+            lp = w.getAttributes()
+            lp.screenBrightness = float(level)
+            w.setAttributes(lp)
+        except Exception:
+            pass
+
+    @run_on_ui_thread
     def _keep_on(flag):
         try:
             w = PythonActivity.mActivity.getWindow()
@@ -166,6 +177,7 @@ if ANDROID:
         except Exception:
             pass
 else:
+    def _dim_ui(level): pass
     def _ui_start(h, lang): pass
     def _ui_stop(h, destroy): pass
     def _keep_on(flag): pass
@@ -568,6 +580,9 @@ class Voice:
                 pass
         if was:
             self.on_status("READY")
+
+    def dim(self, flag):
+        _dim_ui(0.01 if flag else -1.0)
 
     def shutdown(self):
         self.active = False

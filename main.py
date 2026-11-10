@@ -16,6 +16,7 @@ from kivy.properties import NumericProperty
 from kivy.metrics import dp, sp
 from kivy.utils import escape_markup
 from kivy.uix.image import Image
+from kivy.uix.modalview import ModalView
 from kivy.core.image import Image as CoreImage
 import brain
 import voice
@@ -314,13 +315,23 @@ class SettingsScreen(Screen):
         save = btn("SAVE", size_hint=(1, 0.09))
         save.bind(on_release=self.save)
         box.add_widget(save)
+        self.auto_btn = btn("AUTO VOICE ON OPEN: OFF", size_hint=(1, 0.08))
+        self.auto_btn.bind(on_release=self.toggle_auto)
+        box.add_widget(self.auto_btn)
         self.msg = Label(text="", color=CYAN, size_hint=(1, 0.08))
         box.add_widget(self.msg)
         box.add_widget(Widget())
         self.add_widget(box)
 
+    def toggle_auto(self, *a):
+        on = not brain.load_cfg().get("auto_voice", False)
+        brain.set_flag("auto_voice", on)
+        self.auto_btn.text = "AUTO VOICE ON OPEN: " + ("ON" if on else "OFF")
+
     def on_pre_enter(self, *a):
         cfg = brain.load_cfg()
+        self.auto_btn.text = ("AUTO VOICE ON OPEN: "
+                              + ("ON" if cfg.get("auto_voice") else "OFF"))
         self.model.text = cfg.get("model", "")
         self.msg.text = ("OpenRouter: " + ("saved" if cfg.get("api_key") else "nei")
                          + "   Gemini: " + ("saved" if cfg.get("gemini_key") else "nei"))
@@ -350,17 +361,19 @@ class VoiceScreen(Screen):
         self.status = Label(text="READY", color=CYAN, font_size="18sp",
                             size_hint=(1, 0.06))
         box.add_widget(self.status)
-        self.msgs = MsgList(size_hint=(1, 0.38))
+        self.msgs = MsgList(size_hint=(1, 0.30))
         box.add_widget(self.msgs)
         b1 = btn("TAP TO TALK", size_hint=(1, 0.09))
         b2 = btn("WAKE WORD: START", size_hint=(1, 0.09))
         b3 = btn("STOP", size_hint=(1, 0.09))
+        b5 = btn("STANDBY (dark screen)", size_hint=(1, 0.09))
+        b5.bind(on_release=lambda *a: App.get_running_app().standby())
         b4 = btn("TEST VOICE", size_hint=(1, 0.09))
         b4.bind(on_release=lambda *a: App.get_running_app().voice.test())
         b1.bind(on_release=lambda *a: self.go("once"))
         b2.bind(on_release=lambda *a: self.go("wake"))
         b3.bind(on_release=lambda *a: App.get_running_app().voice.stop())
-        for b in (b1, b2, b3, b4):
+        for b in (b1, b2, b3, b5, b4):
             box.add_widget(b)
         self.add_widget(box)
 
@@ -404,6 +417,45 @@ class JarvisApp(App):
 
     def on_voice_text(self, who, text):
         self.sm.get_screen("voice").add(who, text)
+
+    def on_start(self):
+        if brain.load_cfg().get("auto_voice"):
+            Clock.schedule_once(self.auto_start, 1.5)
+
+    def auto_start(self, dt):
+        home = self.sm.get_screen("home")
+        if not home.powered:
+            home.toggle_power()
+        self.sm.current = "voice"
+        self.voice.start("wake")
+
+    def standby(self):
+        home = self.sm.get_screen("home")
+        vs = self.sm.get_screen("voice")
+        if not home.powered:
+            vs.status.text = "Age POWER ON koro"
+            return
+        if not self.voice.active:
+            self.voice.start("wake")
+        view = ModalView(size_hint=(1, 1), auto_dismiss=False,
+                         background_color=(0, 0, 0, 1))
+        view.add_widget(Label(text="STANDBY - jagate screen chhuye dao",
+                              color=(0.1, 0.25, 0.3, 1), font_size="14sp"))
+
+        def wake(inst, touch):
+            inst.dismiss()
+            self.voice.dim(False)
+            return True
+        view.bind(on_touch_down=wake)
+        view.open()
+        self.voice.dim(True)
+
+    def on_pause(self):
+        try:
+            self.voice.stop()          # Android blocks the mic in background
+        except Exception:
+            pass
+        return True                    # keep the app (and chat) alive
 
     def on_stop(self):
         try:

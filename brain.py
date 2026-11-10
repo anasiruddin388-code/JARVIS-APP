@@ -43,6 +43,12 @@ def save_cfg(api_key, model="", gemini_key=""):
     with open(_cfg_path(), "w", encoding="utf-8") as f:
         json.dump(cfg, f)
 
+def set_flag(name, value):
+    cfg = load_cfg()
+    cfg[name] = value
+    with open(_cfg_path(), "w", encoding="utf-8") as f:
+        json.dump(cfg, f)
+
 def load_memory():
     try:
         with open(_mem_path(), "r", encoding="utf-8") as f:
