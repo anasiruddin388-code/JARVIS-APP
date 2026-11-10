@@ -1,4 +1,4 @@
-import datetime, html, json, os, re, ssl, time, unicodedata
+import datetime, html, http.client, json, os, re, ssl, time, unicodedata
 import urllib.parse, urllib.request, urllib.error
 
 _dir = "."
@@ -79,15 +79,36 @@ def _sanitize(text):
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def _call(model, msgs, key, url=URL):
+def _call(model, msgs, key, url=URL, full=False):
     body = json.dumps({"model": model, "messages": msgs,
-                       "max_tokens": 1500, "temperature": 0.6}).encode("utf-8")
+                       "max_tokens": 2000, "temperature": 0.6}).encode("utf-8")
     req = urllib.request.Request(url, data=body, headers={
         "Authorization": "Bearer " + key,
         "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=45, context=_ctx()) as r:
+    with urllib.request.urlopen(req, timeout=60, context=_ctx()) as r:
         data = json.load(r)
-    return (data["choices"][0]["message"]["content"] or "").strip()
+    ch = data["choices"][0]
+    text = (ch["message"].get("content") or "").strip()
+    return (text, ch.get("finish_reason")) if full else text
+
+
+def _dedupe(text):
+    """Remove a reply that repeats the same paragraph/sentence twice."""
+    paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    out = []
+    for p in paras:
+        if not out or p != out[-1]:
+            out.append(p)
+    text = "\n\n".join(out)
+    half = len(text) // 2
+    if len(text) > 40 and text[:half].strip() == text[half:].strip():
+        text = text[:half].strip()
+    parts = re.split(r"(?<=[।?!])\s+", text)
+    res = []
+    for s in parts:
+        if not res or s.strip() != res[-1].strip():
+            res.append(s)
+    return " ".join(res).strip() if len(res) != len(parts) else text
 
 
 def _merge_system(msgs):
@@ -217,9 +238,10 @@ IDENTITY:
 PERSONALITY:
 - Friendly, witty and playful. Add a little fun: a light joke or a clever remark
   where it fits.
-- Sometimes (about once in every 4-5 casual replies, never every time) tease
+- Sometimes (about once in every 3-4 casual replies, never every time) tease
   Nasiruddin lightly, like a good friend roasting him: for example that he is
   still a beginner programmer, or that he is chatting with his own creation.
+  Example of the tone: "বাহ্‌, সূর্য উঠে গেছে আর প্রোগ্রামার সাহেব এখনো বিছানায়!"
   Keep it affectionate, never hurtful. Never joke about religion, family,
   health, appearance or any sensitive topic. No teasing when he asks for facts,
   help, news, or seems sad, tired or in a hurry.
@@ -246,6 +268,17 @@ ANSWER STYLE (very important):
 - Example: user "jupiter er bisoye kichu bolo" -> you
   "জুপিটার (বৃহস্পতি) আমাদের সৌরজগতের সবচেয়ে বড় গ্রহ। ..."
 - Simple questions: 1 to 3 sentences. Give more only when asked or for stories.
+- Nasiruddin often makes STATEMENTS, not questions (for example "ekhon sokal hoye
+  geche", "ami bichanay achi"). React to the statement naturally like a friend.
+  Do not answer a question he did not ask. Say "ভালো আছি" only when he asks how
+  you are.
+- Always address him with "আপনি" (আপনি, আপনার, করুন, বলুন, চান). Never use তুই,
+  তোর, করিস, পারিস, and never mix তুমি with আপনি.
+- Do NOT end every reply with a question: ask a short question back only about
+  once in three replies, and never repeat a question you already asked.
+- Never write the same paragraph or sentence twice in one reply, and do not
+  repeat your previous reply.
+- A story must be told completely, with a proper ending.
 - Talk like a real friend in natural spoken Bengali (কথ্য ভাষা), warm and relaxed.
   Small talk gets a short natural reply and you MAY ask one short question back.
   Example: user "ki korcho" -> you "এই তো, আপনার সাথেই গল্প করছি! আপনি কী করছেন?"
@@ -306,16 +339,28 @@ PERMANENT MEMORY (saved details about Nasiruddin, use when relevant):
         short = ("Gemini" if prov == "gem" else model.split("/")[-1][:16])
         for merged in (False, True):
             try:
-                answer = _sanitize(
-                    _call(model, _merge_system(msgs) if merged else msgs,
-                          key, url))
+                use = _merge_system(msgs) if merged else msgs
+                answer, fin = _call(model, use, key, url, full=True)
+                tries = 0
+                while answer and fin == "length" and tries < 2:   # cut off: continue
+                    tries += 1
+                    try:
+                        more, fin = _call(model, use + [
+                            {"role": "assistant", "content": answer},
+                            {"role": "user", "content":
+                             "যেখানে থেমেছিলে সেখান থেকে বাকিটুকু শেষ করো।"}],
+                            key, url, full=True)
+                        answer += " " + more
+                    except Exception:
+                        break
+                answer = _dedupe(_sanitize(answer))
                 if answer:
                     conversation_history.append(
                         {"role": "user", "content": question})
                     conversation_history.append(
                         {"role": "assistant", "content": answer})
-                    if len(conversation_history) > 20:
-                        conversation_history[:] = conversation_history[-20:]
+                    if len(conversation_history) > 14:
+                        conversation_history[:] = conversation_history[-14:]
                     return answer
                 errs.append(short + ": khali")
                 break
@@ -341,9 +386,13 @@ PERMANENT MEMORY (saved details about Nasiruddin, use when relevant):
                     break
                 errs.append("%s: %s" % (short, e.code))
                 break
-            except (urllib.error.URLError, OSError) as e:
-                if "timed out" in str(e).lower():
-                    errs.append(short + ": timeout")
+            except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+                soft = isinstance(e, (http.client.HTTPException, ConnectionError,
+                                      ssl.SSLError, TimeoutError)) \
+                    or "timed out" in str(e).lower() \
+                    or "remote end closed" in str(e).lower()
+                if soft:                # server dropped us: try the next model
+                    errs.append(short + ": connection dropped")
                     break
                 return ("Internet ba connection somoshya. Karon: "
                         + type(e).__name__ + " " + str(e)[:150])
