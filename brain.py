@@ -8,6 +8,7 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/compl
 GEMINI_MODELS = ["gemini-flash-latest", "gemini-2.5-flash"]
 DEFAULT_MODEL = "openrouter/free"   # means: use CHAIN below
 _or_block_until = 0.0     # OpenRouter daily free limit reached -> skip until then
+_pref = "or"              # provider that answered last time: tried first next time
 
 def _ctx():
     try:
@@ -79,13 +80,13 @@ def _sanitize(text):
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def _call(model, msgs, key, url=URL, full=False):
+def _call(model, msgs, key, url=URL, full=False, timeout=60):
     body = json.dumps({"model": model, "messages": msgs,
                        "max_tokens": 2000, "temperature": 0.6}).encode("utf-8")
     req = urllib.request.Request(url, data=body, headers={
         "Authorization": "Bearer " + key,
         "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=60, context=_ctx()) as r:
+    with urllib.request.urlopen(req, timeout=timeout, context=_ctx()) as r:
         data = json.load(r)
     ch = data["choices"][0]
     text = (ch["message"].get("content") or "").strip()
@@ -202,7 +203,7 @@ def _make_query(question, attempts):
 
 
 def ask_jarvis(question):
-    global _or_block_until
+    global _or_block_until, _pref
     cfg = load_cfg()
     api_key = cfg.get("api_key", "")
     gem_key = cfg.get("gemini_key", "")
@@ -234,6 +235,8 @@ IDENTITY:
   AI অ্যাসিস্ট্যান্ট জার্ভিস।"
 - If asked when you were made: "আমাকে ৮ নভেম্বর ২০২৬ তারিখে তৈরি করা হয়েছে।"
 - Never claim that an AI company or model created you. Never mention model names.
+- Tell these facts (creator, birth date, age) ONLY when he asks. Never volunteer
+  them. A simple "hello" gets a short friendly greeting, nothing more.
 
 PERSONALITY:
 - Friendly, witty and playful. Add a little fun: a light joke or a clever remark
@@ -308,11 +311,13 @@ PERMANENT MEMORY (saved details about Nasiruddin, use when relevant):
         models.append(chosen)
     models += [x for x in CHAIN if x not in models]
 
-    attempts = []                       # (provider, url, key, model)
+    or_list, gem_list = [], []          # (provider, url, key, model)
     if api_key and time.time() >= _or_block_until:
-        attempts += [("or", URL, api_key, m) for m in models]
+        or_list = [("or", URL, api_key, m) for m in models]
     if gem_key:
-        attempts += [("gem", GEMINI_URL, gem_key, m) for m in GEMINI_MODELS]
+        gem_list = [("gem", GEMINI_URL, gem_key, m) for m in GEMINI_MODELS]
+    attempts = (gem_list + or_list) if (_pref == "gem" and gem_list) \
+        else (or_list + gem_list)
     if not attempts:
         return ("OpenRouter-er free limit shesh. Proti din bhor-e (prai 5:30) "
                 "abar cholbe. Ba Settings-e free Gemini Key dao.")
@@ -333,14 +338,22 @@ PERMANENT MEMORY (saved details about Nasiruddin, use when relevant):
             + [{"role": "user", "content": user_text}])
 
     errs = []
+    t0 = time.time()
     for prov, url, key, model in attempts:
+        spent = time.time() - t0
+        if spent > 90:
+            errs.append("onek deri hoye gelo")
+            break
         if prov == "or" and time.time() < _or_block_until:
             continue                    # daily limit hit earlier in this loop
+        if prov == "or" and spent > 30 and gem_list:
+            continue                    # OpenRouter is slow: go to Gemini
+        tmo = 15 if prov == "or" else 40
         short = ("Gemini" if prov == "gem" else model.split("/")[-1][:16])
         for merged in (False, True):
             try:
                 use = _merge_system(msgs) if merged else msgs
-                answer, fin = _call(model, use, key, url, full=True)
+                answer, fin = _call(model, use, key, url, full=True, timeout=tmo)
                 tries = 0
                 while answer and fin == "length" and tries < 2:   # cut off: continue
                     tries += 1
@@ -349,12 +362,13 @@ PERMANENT MEMORY (saved details about Nasiruddin, use when relevant):
                             {"role": "assistant", "content": answer},
                             {"role": "user", "content":
                              "যেখানে থেমেছিলে সেখান থেকে বাকিটুকু শেষ করো।"}],
-                            key, url, full=True)
+                            key, url, full=True, timeout=tmo)
                         answer += " " + more
                     except Exception:
                         break
                 answer = _dedupe(_sanitize(answer))
                 if answer:
+                    _pref = prov
                     conversation_history.append(
                         {"role": "user", "content": question})
                     conversation_history.append(

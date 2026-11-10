@@ -273,11 +273,14 @@ class ChatScreen(Screen):
             return
         self.inp.text = ""
         self.msgs.add("You", text)
-        self.pending = self.msgs.add("JARVIS", "...")
+        self.pending = self.msgs.add("JARVIS", "ভাবছি...")
         lang = "bn" if self.manager.get_screen("home").lang == "BN" else "en"
 
         def work():
-            reply = brain.get_reply(text, lang)
+            try:
+                reply = brain.get_reply(text, lang)
+            except Exception as e:
+                reply = "Error: " + type(e).__name__ + " " + str(e)[:120]
             Clock.schedule_once(lambda dt: self.show(reply))
         threading.Thread(target=work, daemon=True).start()
 
