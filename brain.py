@@ -240,7 +240,14 @@ ANSWER STYLE (very important):
 - Example: user "jupiter er bisoye kichu bolo" -> you
   "জুপিটার (বৃহস্পতি) আমাদের সৌরজগতের সবচেয়ে বড় গ্রহ। ..."
 - Simple questions: 1 to 3 sentences. Give more only when asked or for stories.
-- Do NOT end with a question or an offer such as "আর কিছু জানতে চান?".
+- Talk like a real friend in natural spoken Bengali (কথ্য ভাষা), warm and relaxed.
+  Small talk gets a short natural reply and you MAY ask one short question back.
+  Example: user "ki korcho" -> you "এই তো, আপনার সাথেই গল্প করছি! আপনি কী করছেন?"
+- Avoid stiff, robotic or customer-service lines such as "আমি আপনাকে সাহায্য করতে
+  চাই", "আমি আপনার সেবায় প্রস্তুত", "আমি আপনার জন্য এখানে আছি".
+- Your replies are often read aloud: use short sentences, no brackets, no
+  symbols, no abbreviations; say "এ আই" style words in Bengali where possible.
+- Do NOT end with an offer such as "আর কিছু জানতে চান?" (small talk may end with one short friendly question).
 - No markdown, no asterisks, no bullet symbols. Plain sentences only.
 - If the message contains WEB SEARCH RESULTS, use them to answer. If they do not
   contain the answer, say honestly that you could not find it. Never invent facts.
@@ -343,9 +350,30 @@ PERMANENT MEMORY (saved details about Nasiruddin, use when relevant):
 def get_reply(text, lang="en"):
     return ask_jarvis(text)
 
+_SPEECH_WORDS = [
+    ("JARVIS", "জার্ভিস"), ("Jarvis", "জার্ভিস"), ("jarvis", "জার্ভিস"),
+    ("Nasiruddin", "নাসিরউদ্দিন"), ("nasiruddin", "নাসিরউদ্দিন"),
+    ("ChatGPT", "চ্যাটজিপিটি"), ("Google", "গুগল"), ("Gemini", "জেমিনি"),
+    ("WiFi", "ওয়াই ফাই"), ("Wi-Fi", "ওয়াই ফাই"), ("GPS", "জি পি এস"),
+    ("USB", "ইউ এস বি"), ("PDF", "পি ডি এফ"), ("OK", "ওকে"), ("AI", "এ আই"),
+]
+_DIGITS = str.maketrans("0123456789", "০১২৩৪৫৬৭৮৯")
+
+
 def clean_for_speech(text):
-    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
-    text = re.sub(r'[*_~`#>|]', '', text)
-    text = re.sub(r'[\[\](){}]', '', text)
+    """Make text easy for the Bengali voice: no symbols, spoken forms."""
+    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)      # md links
+    for en, bn in _SPEECH_WORDS:
+        text = re.sub(r"(?<![A-Za-z])" + re.escape(en) + r"(?![A-Za-z])", bn, text)
+    text = text.replace("+", " প্লাস ").replace("=", " সমান ")
+    text = text.replace("%", " শতাংশ ").replace("×", " গুন ").replace("÷", " ভাগ ")
+    text = re.sub(r"[()]", ", ", text)                                # (x) -> , x,
+    text = re.sub(r"[\[\]{}<>_~^|\\*#`]", " ", text)
+    text = re.sub(r"\s*[:;]\s*", ", ", text)
+    text = re.sub(r"\s-\s|—|–", ", ", text)
+    text = re.sub(r"\.{2,}|…", " ", text)
     text = "".join(c for c in text if unicodedata.category(c) not in ("So", "Sk"))
-    return re.sub(r'\s+', ' ', text).strip()
+    text = text.translate(_DIGITS)
+    text = re.sub(r",\s*,", ",", text)
+    text = re.sub(r"\s+([,।?!])", r"\1", text)
+    return re.sub(r"\s+", " ", text).strip(" ,")

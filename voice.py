@@ -1,4 +1,4 @@
-import threading
+import re, threading
 from kivy.clock import Clock
 
 try:
@@ -14,7 +14,9 @@ except Exception:
 
 STOP_WORDS = ["exit", "quit", "stop", "shutdown", "বন্ধ", "বন্ধ করো",
               "বন্ধ হও", "জার্ভিস বন্ধ", "off", "turn off", "goodbye", "বিদায়"]
-WAKE_WORDS = ("jarvis", "জার্ভিস", "জারভিস")
+WAKE_WORDS = ("jarvis", "jarvish", "jervis", "zarvis", "gervis", "জার্ভিস",
+              "জারভিস", "জার্ভিশ", "জারভিশ", "জার্বিস", "জারবিস", "জার্ভীস",
+              "জারভীস", "জারভিজ", "জার্ভিজ")
 
 ERR_TEXT = {
     1: "Internet slow. Google speech-er jonno internet lagbe.",
@@ -92,15 +94,16 @@ if ANDROID:
 
         @java_method("(Landroid/os/Bundle;)V")
         def onResults(self, bundle):
-            text = ""
+            texts = []
             try:
                 lst = bundle.getStringArrayList(
                     SpeechRecognizer.RESULTS_RECOGNITION)
-                if lst is not None and lst.size() > 0:
-                    text = str(lst.get(0))
+                if lst is not None:
+                    for i in range(min(int(lst.size()), 5)):
+                        texts.append(str(lst.get(i)))
             except Exception:
-                text = ""
-            self.on_result(text)
+                texts = []
+            self.on_result(texts)
 
         @java_method("(Landroid/os/Bundle;)V")
         def onPartialResults(self, bundle):
@@ -122,6 +125,19 @@ if ANDROID:
             it.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                         RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             it.putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
+            h.lang = lang
+            try:     # more alternatives + wait longer before cutting the sentence
+                ex = Bundle()
+                ex.putInt(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+                ex.putLong(RecognizerIntent
+                           .EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800)
+                ex.putLong(RecognizerIntent
+                           .EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500)
+                ex.putLong(RecognizerIntent
+                           .EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 2500)
+                it.putExtras(ex)
+            except Exception:
+                pass
             h.rec.startListening(it)
         except Exception:
             h._err(-1)
@@ -207,12 +223,25 @@ class Speaker:
             return "Voice engine: %s | Bengali: OK (%s)" % (eng, self.lang)
         return "Voice engine: %s | Bengali voice NEI. %s" % (eng, self.msg)
 
-    def speak(self, text, add=False):
-        if not self.ready or not text:
-            return False
-        mode = TextToSpeech.QUEUE_ADD if add else TextToSpeech.QUEUE_FLUSH
+    @staticmethod
+    def _chunks(text, limit=180):
+        parts = re.split(r"(?<=[।?!.])\s+|\n+", text)
+        out, cur = [], ""
+        for p in parts:
+            p = p.strip()
+            if not p:
+                continue
+            if cur and len(cur) + len(p) > limit:
+                out.append(cur)
+                cur = p
+            else:
+                cur = (cur + " " + p).strip()
+        if cur:
+            out.append(cur)
+        return out or [text]
+
+    def _speak_one(self, text, mode):
         first_err = ""
-        # 1) modern speak(text, mode, Bundle, id)  2) older speak(text, mode, params)
         for how in (0, 1, 2):
             try:
                 if how == 0:
@@ -222,14 +251,29 @@ class Speaker:
                 else:
                     r = self.tts.speak(text, mode, HashMap())
                 if r == 0:
-                    return True
+                    return True, ""
                 if not first_err:
                     first_err = "code %s" % r
             except Exception as e:
                 if not first_err:
                     first_err = repr(e)[:160]
-        self.msg = "speak() fail: " + first_err
-        return False
+        return False, first_err
+
+    def speak(self, text, add=False):
+        """Speaks sentence by sentence (more natural, nothing gets cut)."""
+        if not self.ready or not text:
+            return False
+        flush = TextToSpeech.QUEUE_FLUSH
+        queue = TextToSpeech.QUEUE_ADD
+        ok_all = True
+        for i, chunk in enumerate(self._chunks(text)):
+            mode = flush if (i == 0 and not add) else queue
+            ok, err = self._speak_one(chunk, mode)
+            if not ok:
+                self.msg = "speak() fail: " + err
+                ok_all = False
+                break
+        return ok_all
 
     def busy(self):
         try:
@@ -260,13 +304,23 @@ class Listener:
         self.rec = None
         self.lis = None
         self.cb = None
+        self.lang = ""
 
     def listen(self, lang, cb):
         self.cb = cb
         _ui_start(self, lang)
 
-    def _res(self, text):
-        Clock.schedule_once(lambda dt: self.cb and self.cb(text, None), 0)
+    def _res(self, texts):
+        if isinstance(texts, str):
+            texts = [texts]
+        texts = [t for t in texts if t and t.strip()]
+        best = texts[0] if texts else ""
+        if str(getattr(self, "lang", "")).startswith("bn"):
+            for t in texts:                      # prefer an answer in Bengali script
+                if re.search("[\u0980-\u09FF]", t):
+                    best = t
+                    break
+        Clock.schedule_once(lambda dt: self.cb and self.cb(best, None), 0)
 
     def _err(self, code):
         Clock.schedule_once(lambda dt: self.cb and self.cb("", code), 0)
@@ -331,7 +385,7 @@ class Voice:
         self._tries = 0
         self.on_text("JARVIS", self.speaker.info())
         if self.mode == "wake":
-            self._warn(self.speaker.speak("Hello Nasiruddin. Jarvis is ready."))
+            self._warn(self.speaker.speak("হ্যালো নাসিরউদ্দিন। জার্ভিস প্রস্তুত।"))
             self.on_text("JARVIS", "'Jarvis' bolo.")
         Clock.schedule_once(self._next, 0.6)
 
@@ -358,7 +412,7 @@ class Voice:
         self._tries = 0
         self.on_text("JARVIS", self.speaker.info())
         ok = self.speaker.speak("আমি জার্ভিস। আপনি কি আমার কথা শুনতে পাচ্ছেন?")
-        self.speaker.speak("Hello Nasiruddin. This is a voice test.", add=True)
+        self.speaker.speak("হ্যালো নাসিরউদ্দিন। জার্ভিস প্রস্তুত।", add=True)
         if not ok:
             self.on_text("JARVIS", "(Voice output hochhe na: "
                          + (self.speaker.msg or "karon jani na") + ")")
