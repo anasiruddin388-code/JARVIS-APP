@@ -63,11 +63,17 @@ def add_contact(name, number):
 # ---------- parsing ----------
 def parse(text):
     t = re.sub(r"\s+", " ", text.strip().lower())
-    # "Rohan ke massage dao hello" / "Rohan ke hello pathao"
-    m = re.match(r"^(?:whatsapp e )?(\w+) ?(?:ke|ko) (?:(?:massage|message|msg) (?:dao|pathao|koro) )?(.+?)(?: (?:pathao|pathao|dao|bolo))?$", t)
-    if m and (re.search(r"massage|message|msg|pathao", t)):
-        return {"kind": "send", "name": m.group(1), "text": m.group(2).strip()}
-    # "send hello to Rohan"
+    t = re.sub(r"^(?:hey |hi |ok )?jarvis[,:]? ", "", t)  # optional wake word at the start
+    # "Rosid ke massage dao hello" / "Rosid ke hello massage dao" / "Rosid ke hello pathao"
+    m = re.match(r"^(?:whatsapp e )?(\w+) ?(?:ke|ko) (.+)$", t)
+    if m and re.search(r"massage|message|msg|pathao", t):
+        rest = m.group(2)
+        rest = re.sub(r"^(?:massage|message|msg) (?:dao|pathao|koro) ", "", rest)
+        rest = re.sub(r" (?:massage|message|msg)(?: (?:dao|pathao|koro))?$", "", rest)
+        rest = re.sub(r" (?:pathao|dao|bolo|koro)$", "", rest).strip()
+        if rest and rest not in ("massage", "message", "msg", "dao", "pathao"):
+            return {"kind": "send", "name": m.group(1), "text": rest}
+    # "send hello to Rosid"
     m = re.match(r"^(?:send|text) (.+) to (\w+)$", t)
     if m:
         return {"kind": "send", "name": m.group(2), "text": m.group(1).strip()}
