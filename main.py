@@ -415,6 +415,7 @@ class JarvisApp(App):
         self.voice = voice.Voice(ask=brain.ask_jarvis,
                                  actions=self.actions,
                                  mood_fn=lambda: brain.last_mood,
+                                 err_fn=lambda: brain.last_failed,
                                  clean=brain.clean_for_speech,
                                  on_status=self.on_voice_status,
                                  on_text=self.on_voice_text,

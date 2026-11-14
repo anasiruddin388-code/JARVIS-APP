@@ -28,7 +28,9 @@ except Exception:
         return f
 
 # ------------------------------------------------------------------ parsing
-_OPEN = (r"(?:kholo|khulo|khol|khul|open koro|open kor|open|chalu koro|চালু করো|"
+_OPEN = (r"(?:kholo|khulo|khol|khul|khule dao|khule den|open koro|open kor|open|"
+         r"on koro|on karo|on kor|onn koro|start koro|launch koro|chalu koro|chalu kor|chalao|"
+         r"অন করো|অন কর|চালু করো|চালু কর|চালাও|লঞ্চ করো|খুলে দাও|খুলে দিন|"
          r"খোলো|খোল|খুলো|খুলুন|খুল|ওপেন করো|ওপেন কর|ওপেন)")
 _JAO = (r"(?:e jao|e jete chai|e jabo|te jao|এ যাও|তে যাও|এ যেতে চাই|এ চলো|তে চলো)")
 _KE = r"(?:ke|কে)"

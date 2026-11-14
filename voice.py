@@ -379,8 +379,8 @@ class Voice:
     wait for 'Jarvis' -> 'জি, বলুন।' -> listen command -> answer by voice."""
 
     def __init__(self, ask, clean, on_status, on_text, lang_fn,
-                 actions=None, mood_fn=None):
-        self.actions, self.mood_fn = actions, mood_fn
+                 actions=None, mood_fn=None, err_fn=None):
+        self.actions, self.mood_fn, self.err_fn = actions, mood_fn, err_fn
         self.ask, self.clean = ask, clean
         self.on_status, self.on_text, self.lang_fn = on_status, on_text, lang_fn
         self.speaker = Speaker() if ANDROID else None
@@ -628,8 +628,10 @@ class Voice:
         self.on_text("JARVIS", ans)
         self.stage = "wake" if self.mode == "wake" else "command"
         mood = self.mood_fn() if self.mood_fn else ""
-        self._say(self.clean(ans)[:3900], then_stop=(self.mode != "wake"),
-                  mood=mood)
+        spoken = self.clean(ans)[:3900]
+        if self.err_fn and self.err_fn():       # do not read error details aloud
+            spoken, mood = "দুঃখিত, এখন উত্তর দিতে পারছি না।", "মন খারাপ"
+        self._say(spoken, then_stop=(self.mode != "wake"), mood=mood)
 
     def stop(self):
         was = self.active

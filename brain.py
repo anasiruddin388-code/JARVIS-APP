@@ -8,6 +8,8 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/compl
 GEMINI_MODELS = ["gemini-flash-latest", "gemini-2.5-flash"]
 DEFAULT_MODEL = "openrouter/free"   # means: use CHAIN below
 _or_block_until = 0.0     # OpenRouter daily free limit reached -> skip until then
+last_failed = False       # True when the last answer was an error text
+_model_cache = {}         # provider -> (model list, time)
 last_mood = ""           # mood word of the last AI reply (for the voice)
 _pref = "or"              # provider that answered last time: tried first next time
 
@@ -69,6 +71,89 @@ CHAIN = ["google/gemma-4-31b-it:free",
 
 _BAD = re.compile("[\u0400-\u04FF\u0600-\u06FF\u0900-\u0963\u0966-\u097F"
                   "\u0E00-\u0E7F\u3040-\u30FF\u3400-\u9FFF\uAC00-\uD7AF]")
+
+
+def _discover_or():
+    """Currently free OpenRouter models (the list changes every few weeks)."""
+    ids, at = _model_cache.get("or", ([], 0))
+    if ids and time.time() - at < 6 * 3600:
+        return ids
+    try:
+        data = json.loads(_get("https://openrouter.ai/api/v1/models", 15))["data"]
+        free = []
+        for m in data:
+            p = m.get("pricing") or {}
+            mid = m.get("id", "")
+            if not mid or mid == "openrouter/free":
+                continue
+            if str(p.get("prompt")) not in ("0", "0.0") or \
+                    str(p.get("completion")) not in ("0", "0.0"):
+                continue
+            if "text" not in ((m.get("architecture") or {}).get("output_modalities")
+                              or ["text"]):
+                continue
+            ctx = m.get("context_length") or 0
+            if ctx >= 8000:
+                free.append((mid, ctx))
+        pref = ("gemma-4", "gemma-3", "qwen3", "llama-3.3", "gpt-oss", "mistral",
+                "deepseek", "glm", "nemotron", "qwen", "llama")
+
+        def rank(item):
+            low = item[0].lower()
+            for i, k in enumerate(pref):
+                if k in low:
+                    return (i, -item[1])
+            return (len(pref), -item[1])
+        ids = [m for m, _ in sorted(free, key=rank)][:4]
+    except Exception:
+        ids = []
+    _model_cache["or"] = (ids, time.time())
+    return ids
+
+
+def _discover_gem(key):
+    """Gemini Flash models this key can really use right now."""
+    ids, at = _model_cache.get("gem", ([], 0))
+    if ids and time.time() - at < 6 * 3600:
+        return ids
+    try:
+        data = json.loads(_get(
+            "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key="
+            + urllib.parse.quote(key), 15))
+        names = []
+        for m in data.get("models", []):
+            n = m.get("name", "").replace("models/", "")
+            low = n.lower()
+            if "generateContent" not in (m.get("supportedGenerationMethods") or []):
+                continue
+            if "flash" not in low or any(x in low for x in (
+                    "image", "tts", "live", "audio", "embed", "thinking",
+                    "robotics", "computer", "exp", "vision", "native")):
+                continue
+            names.append(n)
+
+        def ver(n):
+            m = re.search(r"(\d+(?:\.\d+)?)", n)
+            return float(m.group(1)) if m else 0.0
+        names.sort(key=lambda n: ("preview" in n, "lite" in n, -ver(n), n))
+        if "gemini-flash-latest" in names:
+            names.remove("gemini-flash-latest")
+            names.insert(0, "gemini-flash-latest")
+        ids = names[:3]
+    except Exception:
+        ids = []
+    _model_cache["gem"] = (ids, time.time())
+    return ids
+
+
+def _err_msg(detail):
+    try:
+        e = json.loads(detail).get("error", {})
+        if isinstance(e, dict):
+            return str(e.get("message", ""))[:70]
+        return str(e)[:70]
+    except Exception:
+        return detail[:50]
 
 
 def _sanitize(text):
@@ -216,6 +301,15 @@ def _make_query(question, attempts):
 
 
 def ask_jarvis(question):
+    global last_failed
+    ans = _ask_inner(question)
+    last_failed = ans.startswith(("Cloud AI uttor dilo na", "Error 401",
+                                  "Internet ba connection", "OpenRouter-er free limit",
+                                  "API Key"))
+    return ans
+
+
+def _ask_inner(question):
     global _or_block_until, _pref, last_mood
     last_mood = ""
     cfg = load_cfg()
@@ -337,13 +431,17 @@ PERMANENT MEMORY (saved details about Nasiruddin, use when relevant):
     models = []
     if chosen and chosen != "openrouter/free":
         models.append(chosen)
-    models += [x for x in CHAIN if x not in models]
+    if api_key and time.time() >= _or_block_until:
+        models += [x for x in (_discover_or() or CHAIN) if x not in models]
+        if "openrouter/free" not in models:
+            models.append("openrouter/free")
+    gem_models = (_discover_gem(gem_key) if gem_key else []) or GEMINI_MODELS
 
     or_list, gem_list = [], []          # (provider, url, key, model)
     if api_key and time.time() >= _or_block_until:
         or_list = [("or", URL, api_key, m) for m in models]
     if gem_key:
-        gem_list = [("gem", GEMINI_URL, gem_key, m) for m in GEMINI_MODELS]
+        gem_list = [("gem", GEMINI_URL, gem_key, m) for m in gem_models]
     attempts = (gem_list + or_list) if (_pref == "gem" and gem_list) \
         else (or_list + gem_list)
     if not attempts:
@@ -429,7 +527,7 @@ PERMANENT MEMORY (saved details about Nasiruddin, use when relevant):
                     _or_block_until = time.time() + (nxt - now).total_seconds()
                     errs.append("OpenRouter daily limit shesh")
                     break
-                errs.append("%s: %s" % (short, e.code))
+                errs.append("%s: %s %s" % (short, e.code, _err_msg(detail)))
                 break
             except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
                 soft = isinstance(e, (http.client.HTTPException, ConnectionError,
@@ -437,7 +535,7 @@ PERMANENT MEMORY (saved details about Nasiruddin, use when relevant):
                     or "timed out" in str(e).lower() \
                     or "remote end closed" in str(e).lower()
                 if soft:                # server dropped us: try the next model
-                    errs.append(short + ": connection dropped")
+                    errs.append(short + ": connection dropped (%s)" % type(e).__name__)
                     break
                 return ("Internet ba connection somoshya. Karon: "
                         + type(e).__name__ + " " + str(e)[:150])
