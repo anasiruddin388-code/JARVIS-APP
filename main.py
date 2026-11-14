@@ -21,6 +21,7 @@ from kivy.core.image import Image as CoreImage
 import brain
 import voice
 import atext
+import actions
 
 Window.clearcolor = (0.01, 0.03, 0.09, 1)
 CYAN = (0, 0.9, 1, 1)
@@ -274,6 +275,9 @@ class ChatScreen(Screen):
         self.inp.text = ""
         self.msgs.add("You", text)
         self.pending = self.msgs.add("JARVIS", "ভাবছি...")
+        app = App.get_running_app()
+        if app.actions.handle(text, self.act_reply):
+            return
         lang = "bn" if self.manager.get_screen("home").lang == "BN" else "en"
 
         def work():
@@ -283,6 +287,11 @@ class ChatScreen(Screen):
                 reply = "Error: " + type(e).__name__ + " " + str(e)[:120]
             Clock.schedule_once(lambda dt: self.show(reply))
         threading.Thread(target=work, daemon=True).start()
+
+    def act_reply(self, msg, launch=None):
+        self.show(msg)
+        if launch:
+            Clock.schedule_once(lambda dt: launch(), 0.8)
 
     def show(self, reply):
         self.msgs.remove(self.pending)
@@ -402,7 +411,10 @@ class JarvisApp(App):
         sm.add_widget(SettingsScreen(name="settings"))
         sm.add_widget(VoiceScreen(name="voice"))
         self.sm = sm
+        self.actions = actions.Actions()
         self.voice = voice.Voice(ask=brain.ask_jarvis,
+                                 actions=self.actions,
+                                 mood_fn=lambda: brain.last_mood,
                                  clean=brain.clean_for_speech,
                                  on_status=self.on_voice_status,
                                  on_text=self.on_voice_text,

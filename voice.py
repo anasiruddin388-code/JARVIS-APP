@@ -12,6 +12,19 @@ except Exception:
     def run_on_ui_thread(f):
         return f
 
+# mood tag from the AI -> (pitch, speech rate) of the voice
+MOODS = {"খুশি": (1.15, 1.05), "মজা": (1.12, 1.1), "উত্তেজিত": (1.2, 1.15),
+         "মন খারাপ": (0.85, 0.85), "দুঃখ": (0.85, 0.85), "চিন্তিত": (0.95, 0.92),
+         "আদর": (1.05, 0.95), "ঘুম": (0.9, 0.85)}
+
+
+def mood_params(mood):
+    for key, val in MOODS.items():
+        if key in (mood or ""):
+            return val
+    return (1.0, 1.0)
+
+
 STOP_WORDS = ["exit", "quit", "stop", "shutdown", "বন্ধ", "বন্ধ করো",
               "বন্ধ হও", "জার্ভিস বন্ধ", "off", "turn off", "goodbye", "বিদায়"]
 WAKE_WORDS = ("jarvis", "jarvish", "jervis", "zarvis", "gervis", "জার্ভিস",
@@ -289,6 +302,15 @@ class Speaker:
                 break
         return ok_all
 
+    def set_mood(self, mood):
+        pitch, rate = mood_params(mood)
+        try:
+            if self.ready:
+                self.tts.setPitch(float(pitch))
+                self.tts.setSpeechRate(float(rate))
+        except Exception:
+            pass
+
     def busy(self):
         try:
             return bool(self.ready and self.tts.isSpeaking())
@@ -356,7 +378,9 @@ class Voice:
     """Wake-word loop is the same logic as the Termux controller.py:
     wait for 'Jarvis' -> 'জি, বলুন।' -> listen command -> answer by voice."""
 
-    def __init__(self, ask, clean, on_status, on_text, lang_fn):
+    def __init__(self, ask, clean, on_status, on_text, lang_fn,
+                 actions=None, mood_fn=None):
+        self.actions, self.mood_fn = actions, mood_fn
         self.ask, self.clean = ask, clean
         self.on_status, self.on_text, self.lang_fn = on_status, on_text, lang_fn
         self.speaker = Speaker() if ANDROID else None
@@ -458,8 +482,9 @@ class Voice:
         self.on_status("LISTENING")
         self.listener.listen(self.lang_fn(), self._heard)
 
-    def _say(self, text, then_stop=False):
+    def _say(self, text, then_stop=False, mood=""):
         self.on_status("SPEAKING")
+        self.speaker.set_mood(mood)
         self._warn(self.speaker.speak(text))
         self.finish = then_stop
         Clock.schedule_once(self._next, 0.7)
@@ -549,7 +574,44 @@ class Voice:
         else:
             Clock.schedule_once(self._next, 0.2)
 
+    # ---- device commands (open apps, WhatsApp, call ...): only when he says so ----
+    def _act_reply(self, msg, launch=None):
+        if not self.active:
+            return
+        self.on_text("JARVIS", msg)
+        keep = bool(self.actions and self.actions.pending)
+        self.stage = "command" if keep else ("wake" if self.mode == "wake"
+                                              else "command")
+        self.on_status("SPEAKING")
+        self.speaker.set_mood("খুশি")
+        self._warn(self.speaker.speak(self.clean(msg)))
+        self.finish = (self.mode != "wake") and not keep
+        if launch:
+            Clock.schedule_once(lambda dt: self._launch_when_quiet(launch, 0), 0.8)
+        else:
+            Clock.schedule_once(self._next, 0.7)
+
+    def _launch_when_quiet(self, launch, waited):
+        if not self.active:
+            return
+        if self.speaker.busy() and waited < 7:
+            Clock.schedule_once(
+                lambda dt: self._launch_when_quiet(launch, waited + 0.3), 0.3)
+            return
+        try:
+            launch()                   # the other app opens; Android pauses us
+        except Exception as e:
+            self.on_text("JARVIS", "(খুলতে পারলাম না: %s)" % type(e).__name__)
+        Clock.schedule_once(self._next, 2.5)
+
     def _ask(self, text):
+        if self.actions:
+            try:
+                if self.actions.handle(text, self._act_reply):
+                    self.on_status("THINKING")
+                    return
+            except Exception:
+                pass
         self.on_status("THINKING")
 
         def work():
@@ -565,7 +627,9 @@ class Voice:
             return
         self.on_text("JARVIS", ans)
         self.stage = "wake" if self.mode == "wake" else "command"
-        self._say(self.clean(ans)[:3900], then_stop=(self.mode != "wake"))
+        mood = self.mood_fn() if self.mood_fn else ""
+        self._say(self.clean(ans)[:3900], then_stop=(self.mode != "wake"),
+                  mood=mood)
 
     def stop(self):
         was = self.active

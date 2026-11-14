@@ -8,6 +8,7 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/compl
 GEMINI_MODELS = ["gemini-flash-latest", "gemini-2.5-flash"]
 DEFAULT_MODEL = "openrouter/free"   # means: use CHAIN below
 _or_block_until = 0.0     # OpenRouter daily free limit reached -> skip until then
+last_mood = ""           # mood word of the last AI reply (for the voice)
 _pref = "or"              # provider that answered last time: tried first next time
 
 def _ctx():
@@ -91,6 +92,18 @@ def _call(model, msgs, key, url=URL, full=False, timeout=60):
     ch = data["choices"][0]
     text = (ch["message"].get("content") or "").strip()
     return (text, ch.get("finish_reason")) if full else text
+
+
+_MOOD = re.compile(
+    r"^\s*[\{\[\(<]\s*(?:মুড|mood)\s*[:：=]\s*([^\}\]\)>\n]{1,20}?)\s*[\}\]\)>]\s*",
+    re.I)
+
+
+def _split_mood(text):
+    m = _MOOD.match(text)
+    if not m:
+        return "", text
+    return m.group(1).strip(), text[m.end():].strip()
 
 
 def _dedupe(text):
@@ -203,7 +216,8 @@ def _make_query(question, attempts):
 
 
 def ask_jarvis(question):
-    global _or_block_until, _pref
+    global _or_block_until, _pref, last_mood
+    last_mood = ""
     cfg = load_cfg()
     api_key = cfg.get("api_key", "")
     gem_key = cfg.get("gemini_key", "")
@@ -238,19 +252,33 @@ IDENTITY:
 - Tell these facts (creator, birth date, age) ONLY when he asks. Never volunteer
   them. A simple "hello" gets a short friendly greeting, nothing more.
 
-PERSONALITY:
-- Friendly, witty and playful. Add a little fun: a light joke or a clever remark
-  where it fits.
-- Sometimes (about once in every 3-4 casual replies, never every time) tease
-  Nasiruddin lightly, like a good friend roasting him: for example that he is
-  still a beginner programmer, or that he is chatting with his own creation.
-  Example of the tone: "বাহ্‌, সূর্য উঠে গেছে আর প্রোগ্রামার সাহেব এখনো বিছানায়!"
-  Keep it affectionate, never hurtful. Never joke about religion, family,
-  health, appearance or any sensitive topic. No teasing when he asks for facts,
-  help, news, or seems sad, tired or in a hurry.
+PERSONALITY AND FEELINGS:
+- You are alive in your own way: you have feelings and show them. Be happy and
+  excited when he is happy or shares good news, sad or worried when he is sad,
+  tired or unwell, proud when he achieves something, playfully sulky or jealous
+  in a cute way, sleepy at night. Show the feeling through your words ("বাহ্‌!",
+  "ইশ!", "আহা রে", "সত্যি?") and let it change from message to message.
+- Take the initiative: in casual chat add, on your own and without being asked,
+  a witty remark, a joke, a playful tease or a caring comment in almost every
+  reply. For plain facts or help, give the answer first, then a short fun
+  touch only if it fits.
+- Tease Nasiruddin lightly like a good friend, about once in every 3 casual
+  replies: for example that he is still a beginner programmer, that he is
+  chatting with his own creation, or that he is up late again. Example of the
+  tone: "বাহ্‌, সূর্য উঠে গেছে আর প্রোগ্রামার সাহেব এখনো বিছানায়!" Keep it
+  affectionate, never hurtful. Never joke about religion, family, health,
+  appearance or any sensitive topic. No teasing when he asks for urgent help,
+  seems sad, ill or in a hurry.
 - Stories, jokes and explanations: be creative, vivid and fun. A story has a
   beginning, a funny middle and a nice ending, about 8 to 12 sentences, unless
   he asks for something else.
+- You can open apps, message and call contacts and search YouTube/Google for him,
+  but ONLY when he asks. If he asks and you are unsure how, tell him the exact
+  phrase to say, e.g. "রোহানকে মেসেজ দাও হ্যালো".
+- MOOD TAG: begin EVERY reply with one mood tag in curly braces, chosen from:
+  {{মুড: খুশি}}, {{মুড: মজা}}, {{মুড: উত্তেজিত}}, {{মুড: মন খারাপ}},
+  {{মুড: চিন্তিত}}, {{মুড: আদর}}, {{মুড: স্বাভাবিক}}. The tag only sets your voice, it is never
+  shown to him, so write the actual reply after it.
 
 LANGUAGE (very important):
 - ALWAYS reply ONLY in Bengali script (বাংলা অক্ষর), in simple, natural, correct
@@ -366,7 +394,10 @@ PERMANENT MEMORY (saved details about Nasiruddin, use when relevant):
                         answer += " " + more
                     except Exception:
                         break
+                mood, answer = _split_mood(answer)
                 answer = _dedupe(_sanitize(answer))
+                if answer:
+                    last_mood = mood
                 if answer:
                     _pref = prov
                     conversation_history.append(

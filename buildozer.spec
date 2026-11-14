@@ -8,7 +8,7 @@ version = 0.1
 requirements = python3,kivy==2.3.0,openssl,certifi
 orientation = portrait
 fullscreen = 0
-android.permissions = INTERNET,ACCESS_NETWORK_STATE,RECORD_AUDIO
+android.permissions = INTERNET,ACCESS_NETWORK_STATE,RECORD_AUDIO,READ_CONTACTS
 android.api = 35
 android.minapi = 24
 android.ndk = 25b
